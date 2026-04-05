@@ -12,26 +12,24 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 
 # --- HELFER: DATEN LADEN ---
 def get_list(sheet_name):
-    """Holt Stammdaten und stellt sicher, dass ALLES ausgelesen wird"""
+    """Liest Stammdaten ohne Header aus, damit auch die 1. Zeile erfasst wird"""
     try:
-        # Wir lesen das Blatt komplett ohne Header-Einschränkung
-        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=60)
+        # header=None ist entscheidend, damit Zeile 1 nicht ignoriert wird
+        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=60, header=None)
         
         if df is None or df.empty:
             return []
         
-        # Wir nehmen alle Werte der ersten Spalte, wandeln sie in Strings,
-        # entfernen Leerzeichen und filtern leere Einträge/Duplikate
+        # Wir nehmen alle Werte aus der ersten Spalte (Index 0)
         full_list = df.iloc[:, 0].astype(str).str.strip().replace('nan', None).dropna().unique().tolist()
         
-        # Sortieren für bessere Übersicht im Dropdown (außer bei Zahlen-Logik störend)
         return sorted(full_list)
     except Exception as e:
-        st.error(f"Fehler beim Auslesen von {sheet_name}: {e}")
+        st.error(f"Fehler bei {sheet_name}: {e}")
         return []
 
 def load_main_data():
-    """Lädt Ladedaten mit Sicherheits-Cache"""
+    """Lädt die Ladedaten (hier bleibt header=0, da die Ladedaten-Tabelle Überschriften braucht)"""
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=20)
         
@@ -42,7 +40,6 @@ def load_main_data():
         if df.empty:
             return df
 
-        # Bereinigung der Ladedaten
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip().replace('nan', '')
         
@@ -73,7 +70,6 @@ with st.sidebar:
         f_date = st.date_input("Ladedatum", datetime.now())
         f_stueck = st.number_input("Stück", min_value=1, value=50)
         
-        # Dropdowns mit den bereinigten Listen
         f_kal = st.selectbox("Kaliber", list_kaliber if list_kaliber else ["-"])
         f_ges = st.selectbox("Geschoss", list_geschosse if list_geschosse else ["-"])
         f_pul = st.selectbox("Pulver", list_pulver if list_pulver else ["-"])
@@ -112,8 +108,8 @@ with st.sidebar:
             current_items = get_list(cat)
             val_clean = new_val.strip()
             if val_clean not in current_items:
-                # Wichtig: Wir schreiben die Liste sauber als Spalte zurück
-                new_df = pd.DataFrame({cat: current_items + [val_clean]})
+                # Da wir header=None nutzen, schreiben wir die Liste einfach untereinander
+                new_df = pd.DataFrame(current_items + [val_clean])
                 conn.update(spreadsheet=SHEET_URL, worksheet=cat, data=new_df)
                 st.cache_data.clear()
                 st.rerun()
@@ -122,7 +118,6 @@ with st.sidebar:
 if df_main is None:
     st.warning("Verbindung wird neu aufgebaut...")
 elif not df_main.empty:
-    # Filter (Basis: Tatsächlich vorhandene Daten)
     available_kaliber = sorted(df_main["Kaliber"].unique().tolist())
     filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=available_kaliber)
     
@@ -130,7 +125,6 @@ elif not df_main.empty:
     if filter_kal:
         display_df = display_df[display_df["Kaliber"].isin(filter_kal)]
 
-    # Metriken
     m1, m2, m3 = st.columns(3)
     total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').fillna(0).sum()
     
@@ -151,3 +145,4 @@ with st.expander("🛠️ Administration"):
             conn.update(spreadsheet=SHEET_URL, worksheet="Ladedaten", data=df_main[:-1])
             st.cache_data.clear()
             st.rerun()
+            
