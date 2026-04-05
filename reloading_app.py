@@ -7,7 +7,6 @@ from datetime import datetime
 st.set_page_config(page_title="Reloading Log Professional", page_icon="🎯", layout="wide")
 
 # --- VERBINDUNG ---
-# Wir erstellen die Verbindung
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # DEINE TABELLEN-URL
@@ -16,23 +15,31 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 # --- HELFER: DATEN LADEN ---
 def get_list(sheet_name):
     try:
-        # Wir nutzen hier .read() mit der URL UND dem Tabellennamen
-        # Das zwingt die Library, die Credentials aus den Secrets zu verwenden
-        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name)
+        # Nutzt spreadsheet=URL um Secrets zu erzwingen
+        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=3600)
         return df.iloc[:, 0].dropna().tolist()
     except Exception as e:
-        st.error(f"Fehler beim Laden der Liste {sheet_name}: {e}")
+        # Falls ein Reiter fehlt, geben wir eine leere Liste zurück, damit die App nicht abstürzt
         return []
 
 def load_main_data():
-    # WICHTIG: Hier muss 'spreadsheet=SHEET_URL' stehen, nicht nur die URL als String
-    df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedatum", ttl=0)
-    return df.dropna(how="all")
+    try:
+        df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedatum", ttl=0)
+        return df.dropna(how="all")
+    except Exception:
+        return pd.DataFrame()
+
+# --- DATEN INITIALISIEREN (WICHTIG: Vor der Sidebar!) ---
+list_kaliber = get_list("Kaliber")
+list_geschosse = get_list("Geschosse")
+list_pulver = get_list("Pulver")
+list_zuender = get_list("Zünder")
+list_huelsen = get_list("Hülsen")
+
+df_main = load_main_data()
+
 # --- HAUPTBEREICH ---
 st.title("🎯 Wiederlade-Logbuch")
-
-# Daten laden
-df_main = load_main_data()
 
 # --- SIDEBAR: NEUE LADUNG ---
 with st.sidebar:
@@ -40,29 +47,37 @@ with st.sidebar:
     with st.form("entry_form", clear_on_submit=True):
         f_date = st.date_input("Ladedatum", datetime.now())
         f_stueck = st.number_input("Stück", min_value=1, step=1, value=50)
-        f_kal = st.selectbox("Kaliber", list_kaliber)
-        f_ges = st.selectbox("Geschoss", list_geschosse)
-        f_pul = st.selectbox("Pulver", list_pulver)
+        
+        # Hier nutzen wir jetzt die oben definierten Listen
+        f_kal = st.selectbox("Kaliber", list_kaliber if list_kaliber else ["Keine Daten"])
+        f_ges = st.selectbox("Geschoss", list_geschosse if list_geschosse else ["Keine Daten"])
+        f_pul = st.selectbox("Pulver", list_pulver if list_pulver else ["Keine Daten"])
+        
         f_grain = st.number_input("Grain", step=0.1, format="%.1f")
         f_oal = st.number_input("OAL", step=0.1, format="%.1f")
         f_crimp = st.text_input("Crimp", value="factory leicht")
-        f_zuen = st.selectbox("Zünder", list_zuender)
-        f_huel = st.selectbox("Hülsen", list_huelsen)
+        
+        f_zuen = st.selectbox("Zünder", list_zuender if list_zuender else ["Keine Daten"])
+        f_huel = st.selectbox("Hülsen", list_huelsen if list_huelsen else ["Keine Daten"])
+        
         f_anm = st.text_input("Anmerkung")
         
         if st.form_submit_button("💾 Speichern"):
-            # Gesamtzahl berechnen (letzter Wert + neue Stück)
-            current_total = df_main["Gesamt"].iloc[-1] if not df_main.empty else 0
+            # Gesamtzahl berechnen
+            current_total = 0
+            if not df_main.empty and "Gesamt" in df_main.columns:
+                current_total = pd.to_numeric(df_main["Gesamt"]).iloc[-1]
+            
             new_total = current_total + f_stueck
             
             new_row = pd.DataFrame([{
                 "Ladedatum": f_date.strftime("%d.%m.%Y"),
-                "Stück": f_stueck,
+                "Stück": int(f_stueck),
                 "Kaliber": f_kal,
                 "Geschoss": f_ges,
                 "Pulver": f_pul,
-                "Grain": f_grain,
-                "OAL": f_oal,
+                "Grain": float(f_grain),
+                "OAL": float(f_oal),
                 "Crimp": f_crimp,
                 "Zünder": f_zuen,
                 "Hülsen": f_huel,
@@ -76,12 +91,16 @@ with st.sidebar:
             st.success(f"Gespeichert! Gesamtstand: {new_total}")
             st.rerun()
 
-# --- DASHBOARD ---
+# --- DASHBOARD ANZEIGE ---
 if not df_main.empty:
     # Metriken oben
     m1, m2, m3 = st.columns(3)
-    total_produced = df_main["Gesamt"].iloc[-1]
-    m1.metric("Gesamtproduktion", f"{int(total_produced)} Schuss")
+    
+    # Sicherstellen, dass Gesamt existiert
+    if "Gesamt" in df_main.columns:
+        total_produced = df_main["Gesamt"].iloc[-1]
+        m1.metric("Gesamtproduktion", f"{int(total_produced)} Schuss")
+    
     m2.metric("Letzte Ladung", f"{df_main['Stück'].iloc[-1]}x {df_main['Kaliber'].iloc[-1]}")
     m3.metric("Einträge", len(df_main))
 
@@ -97,7 +116,7 @@ if not df_main.empty:
     st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
     
 else:
-    st.info("Keine Daten im Reiter 'Ladedatum' gefunden.")
+    st.info("Warte auf Daten aus 'Ladedatum'...")
 
 # --- LÖSCH-MODUS ---
 with st.expander("🛠️ Admin / Korrektur"):
