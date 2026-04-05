@@ -12,7 +12,6 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 
 # --- HELFER: DATEN LADEN ---
 def get_list(sheet_name):
-    """Holt die Daten aus den Referenz-Tabellenblättern (Geschosse, Pulver, etc.)"""
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
         return df.iloc[:, 0].dropna().unique().tolist()
@@ -20,12 +19,14 @@ def get_list(sheet_name):
         return []
 
 def load_main_data():
-    """Lädt das Haupt-Tabellenblatt 'Ladedaten'"""
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=0)
+        # Spalte 'Gesamt' entfernen, falls sie noch existiert
+        if "Gesamt" in df.columns:
+            df = df.drop(columns=["Gesamt"])
         return df.dropna(how="all")
     except Exception as e:
-        st.error(f"Fehler beim Laden des Blattes 'Ladedaten': {e}")
+        st.error(f"Fehler beim Laden: {e}")
         return pd.DataFrame()
 
 # --- DATEN INITIALISIEREN ---
@@ -56,14 +57,6 @@ with st.sidebar:
         f_anm = st.text_input("Anmerkung")
         
         if st.form_submit_button("💾 Ladung Speichern"):
-            # Gesamtzahl robust berechnen
-            current_total = 0
-            if not df_main.empty and "Gesamt" in df_main.columns:
-                num_total = pd.to_numeric(df_main["Gesamt"], errors='coerce').dropna()
-                current_total = num_total.max() if not num_total.empty else 0
-            
-            new_total = current_total + f_stueck
-            
             new_row = pd.DataFrame([{
                 "Ladedatum": f_date.strftime("%d.%m.%Y"),
                 "Stück": int(f_stueck),
@@ -75,8 +68,7 @@ with st.sidebar:
                 "Crimp": f_crimp,
                 "Zünder": f_zuen,
                 "Hülsen": f_huel,
-                "Anmerkung": f_anm,
-                "Gesamt": int(new_total)
+                "Anmerkung": f_anm
             }])
             
             updated = pd.concat([df_main, new_row], ignore_index=True)
@@ -97,32 +89,35 @@ with st.sidebar:
                 new_df = pd.DataFrame({cat: current_items + [new_val]})
                 conn.update(spreadsheet=SHEET_URL, worksheet=cat, data=new_df)
                 st.cache_data.clear()
-                st.success(f"'{new_val}' wurde hinzugefügt!")
                 st.rerun()
-            else:
-                st.warning("Eintrag existiert bereits.")
 
-# --- DASHBOARD ANZEIGE ---
+# --- HAUPTBEREICH: FILTER & DASHBOARD ---
 if not df_main.empty:
+    # Filter-Sektion
+    filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=sorted(list_kaliber) if list_kaliber else [])
+    
+    # Daten filtern
+    display_df = df_main.copy()
+    if filter_kal:
+        display_df = display_df[display_df["Kaliber"].isin(filter_kal)]
+
+    # Metriken berechnen (basierend auf gefilterten Daten!)
     m1, m2, m3 = st.columns(3)
     
-    # Sicherer Umgang mit der Spalte 'Gesamt'
-    if "Gesamt" in df_main.columns:
-        num_total = pd.to_numeric(df_main["Gesamt"], errors='coerce').dropna()
-        total_val = int(num_total.max()) if not num_total.empty else 0
-        m1.metric("Gesamtproduktion", f"{total_val} Schuss")
+    # Summe der Stück-Spalte berechnen
+    if "Stück" in display_df.columns:
+        total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').sum()
+        label = "Gesamt (gefiltert)" if filter_kal else "Gesamtproduktion"
+        m1.metric(label, f"{int(total_sum)} Schuss")
     
-    m2.metric("Einträge", len(df_main))
+    m2.metric("Einträge", len(display_df))
     
-    if "Kaliber" in df_main.columns:
-        m3.metric("Letztes Kaliber", str(df_main["Kaliber"].iloc[-1]))
+    if not display_df.empty and "Kaliber" in display_df.columns:
+        m3.metric("Letzter Eintrag", str(display_df["Kaliber"].iloc[-1]))
 
     st.divider()
-    filter_kal = st.multiselect("Kaliber filtern", options=list_kaliber)
-    display_df = df_main
-    if filter_kal:
-        display_df = df_main[df_main["Kaliber"].isin(filter_kal)]
-
+    
+    # Tabelle anzeigen (neueste oben)
     st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
 else:
     st.info("Das Tabellenblatt 'Ladedaten' ist leer oder wurde nicht gefunden.")
