@@ -7,20 +7,25 @@ from datetime import datetime
 st.set_page_config(page_title="Reloading Log Professional", page_icon="🎯", layout="wide")
 
 # --- VERBINDUNG ---
+# Wir erstellen die Verbindung
 conn = st.connection("gsheets", type=GSheetsConnection)
+
+# DEINE TABELLEN-URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxKSwe1jfOi7zqX8LHY/edit"
 
-# --- HELFER: DATEN LADEN (MIT AUTHENTIFIZIERUNG) ---
+# --- HELFER: DATEN LADEN ---
 def get_list(sheet_name):
     try:
-        # WICHTIG: spreadsheet=SHEET_URL sorgt dafür, dass die Secrets genutzt werden!
-        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=3600)
+        # Wir nutzen hier .read() mit der URL UND dem Tabellennamen
+        # Das zwingt die Library, die Credentials aus den Secrets zu verwenden
+        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name)
         return df.iloc[:, 0].dropna().tolist()
-    except:
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Liste {sheet_name}: {e}")
         return []
 
 def load_main_data():
-    # Auch hier: spreadsheet=SHEET_URL verwenden
+    # WICHTIG: Hier muss 'spreadsheet=SHEET_URL' stehen, nicht nur die URL als String
     df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedatum", ttl=0)
     return df.dropna(how="all")
 # --- HAUPTBEREICH ---
