@@ -12,39 +12,42 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 
 # --- HELFER: DATEN LADEN ---
 def get_list(sheet_name):
+    """Holt Stammdaten (Pulver, Geschosse etc.) mit 10 Min Cache"""
     try:
-        # Hier nutzen wir einen kurzen Cache von 10 Min für die Stammdaten
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=600)
         return [str(x).strip() for x in df.iloc[:, 0].dropna().unique().tolist()]
     except:
         return []
 
 def load_main_data():
+    """Lädt Ladedaten mit kurzem Cache gegen Google-Sperren"""
     try:
-        # Ladedaten ohne Cache (ttl=0), damit neue Einträge sofort da sind
-        df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=0)
+        # ttl=20 verhindert, dass schnelles Filtern zu viele Google-Anfragen sendet
+        df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=20)
         
         if df is None:
             return pd.DataFrame()
         
-        # Entferne komplett leere Zeilen/Spalten
+        # Leere Zeilen entfernen
         df = df.dropna(how="all")
         
         if df.empty:
             return df
 
-        # Alle Textspalten bereinigen
+        # Alle Textspalten von Leerzeichen bereinigen
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
         
-        # Spalte 'Gesamt' ignorieren, falls sie in Google Sheets noch existiert
+        # Alte Gesamt-Spalte ignorieren
         if "Gesamt" in df.columns:
             df = df.drop(columns=["Gesamt"])
             
         return df
     except Exception as e:
-        # Zeige den echten Fehler an, falls Google nicht antwortet
-        st.error(f"⚠️ Verbindung zu Google Sheets unterbrochen: {e}")
+        if "429" in str(e):
+            st.error("⚠️ Google Limit erreicht. Bitte 30 Sekunden warten und Seite neu laden.")
+        else:
+            st.error(f"⚠️ Fehler beim Laden: {e}")
         return None 
 
 # --- DATEN INITIALISIEREN ---
@@ -81,10 +84,14 @@ with st.sidebar:
                 "Pulver": f_pul, "Grain": f_grain, "OAL": f_oal,
                 "Crimp": f_crimp, "Zünder": f_zuen, "Hülsen": f_huel, "Anmerkung": f_anm
             }])
-            # Wir hängen die neue Zeile an die bestehenden Daten an
-            updated = pd.concat([df_main, new_row], ignore_index=True) if df_main is not None else new_row
+            
+            # Neue Daten an bestehende anfügen
+            updated = pd.concat([df_main, new_row], ignore_index=True) if df_main is not None and not df_main.empty else new_row
             conn.update(spreadsheet=SHEET_URL, worksheet="Ladedaten", data=updated)
+            
+            # Cache sofort löschen, damit neuer Eintrag sichtbar wird
             st.cache_data.clear()
+            st.success("Erfolgreich gespeichert!")
             st.rerun()
 
     st.divider()
@@ -95,18 +102,19 @@ with st.sidebar:
     if st.button(f"➕ Zu {cat} hinzufügen"):
         if new_val:
             current_items = get_list(cat)
-            if new_val.strip() not in current_items:
-                new_df = pd.DataFrame({cat: current_items + [new_val.strip()]})
+            val_clean = new_val.strip()
+            if val_clean not in current_items:
+                new_df = pd.DataFrame({cat: current_items + [val_clean]})
                 conn.update(spreadsheet=SHEET_URL, worksheet=cat, data=new_df)
                 st.cache_data.clear()
                 st.rerun()
 
 # --- HAUPTBEREICH ---
-# Wenn df_main None ist, gab es einen Verbindungsfehler
 if df_main is None:
-    st.warning("Verbindung wird neu aufgebaut... Bitte Seite aktualisieren.")
+    st.warning("Verbindung wird neu aufgebaut... Bitte 10 Sekunden warten.")
 elif not df_main.empty:
     # Filter
+    # Wir ziehen die Kaliber direkt aus den aktuellen Ladedaten für maximale Konsistenz
     available_kaliber = sorted(df_main["Kaliber"].unique().tolist())
     filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=available_kaliber)
     
@@ -117,6 +125,7 @@ elif not df_main.empty:
     # Metriken
     m1, m2, m3 = st.columns(3)
     
+    # Summe der Stückzahl (reagiert auf Filter)
     total_sum = 0
     if "Stück" in display_df.columns:
         total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').fillna(0).sum()
@@ -124,6 +133,7 @@ elif not df_main.empty:
     m1.metric("Schuss (gefiltert)", f"{int(total_sum)}")
     m2.metric("Einträge", len(display_df))
     
+    # Letztes Kaliber sicher auslesen
     last_cal = "-"
     if not display_df.empty and "Kaliber" in display_df.columns:
         last_cal = str(display_df["Kaliber"].iloc[-1])
@@ -131,13 +141,15 @@ elif not df_main.empty:
 
     st.divider()
     
+    # Tabelle anzeigen
     if not display_df.empty:
         st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
     else:
-        st.info("Keine Daten für diesen Filter.")
+        st.info("Keine Daten für diesen Filter gefunden.")
 else:
-    st.info("Das Tabellenblatt 'Ladedaten' scheint leer zu sein oder wurde nicht geladen.")
+    st.info("Das Tabellenblatt 'Ladedaten' ist leer oder wurde noch nicht geladen.")
 
+# Administration
 with st.expander("🛠️ Administration"):
     if st.button("🗑️ Letzten Eintrag löschen"):
         if df_main is not None and not df_main.empty:
