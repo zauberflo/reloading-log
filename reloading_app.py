@@ -14,17 +14,22 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 def get_list(sheet_name):
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
-        return df.iloc[:, 0].dropna().unique().tolist()
+        # .strip() entfernt unsichtbare Leerzeichen, die den Filter blockieren
+        return [str(x).strip() for x in df.iloc[:, 0].dropna().unique().tolist()]
     except:
         return []
 
 def load_main_data():
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=0)
-        # Spalte 'Gesamt' entfernen, falls sie noch existiert
+        df = df.dropna(how="all")
+        # WICHTIG: Alle Textspalten von Leerzeichen befreien
+        for col in df.select_dtypes(include=['object']).columns:
+            df[col] = df[col].astype(str).str.strip()
+        
         if "Gesamt" in df.columns:
             df = df.drop(columns=["Gesamt"])
-        return df.dropna(how="all")
+        return df
     except Exception as e:
         st.error(f"Fehler beim Laden: {e}")
         return pd.DataFrame()
@@ -59,22 +64,13 @@ with st.sidebar:
         if st.form_submit_button("💾 Ladung Speichern"):
             new_row = pd.DataFrame([{
                 "Ladedatum": f_date.strftime("%d.%m.%Y"),
-                "Stück": int(f_stueck),
-                "Kaliber": f_kal,
-                "Geschoss": f_ges,
-                "Pulver": f_pul,
-                "Grain": f_grain,
-                "OAL": f_oal,
-                "Crimp": f_crimp,
-                "Zünder": f_zuen,
-                "Hülsen": f_huel,
-                "Anmerkung": f_anm
+                "Stück": int(f_stueck), "Kaliber": f_kal, "Geschoss": f_ges,
+                "Pulver": f_pul, "Grain": f_grain, "OAL": f_oal,
+                "Crimp": f_crimp, "Zünder": f_zuen, "Hülsen": f_huel, "Anmerkung": f_anm
             }])
-            
             updated = pd.concat([df_main, new_row], ignore_index=True)
             conn.update(spreadsheet=SHEET_URL, worksheet="Ladedaten", data=updated)
             st.cache_data.clear()
-            st.success("Erfolgreich gespeichert!")
             st.rerun()
 
     st.divider()
@@ -85,42 +81,43 @@ with st.sidebar:
     if st.button(f"➕ Zu {cat} hinzufügen"):
         if new_val:
             current_items = get_list(cat)
-            if new_val not in current_items:
-                new_df = pd.DataFrame({cat: current_items + [new_val]})
+            if new_val.strip() not in current_items:
+                new_df = pd.DataFrame({cat: current_items + [new_val.strip()]})
                 conn.update(spreadsheet=SHEET_URL, worksheet=cat, data=new_df)
                 st.cache_data.clear()
                 st.rerun()
 
-# --- HAUPTBEREICH: FILTER & DASHBOARD ---
+# --- HAUPTBEREICH ---
 if not df_main.empty:
-    # Filter-Sektion
-    filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=sorted(list_kaliber) if list_kaliber else [])
+    # Filter
+    # Wir nehmen die Kaliber direkt aus den Daten, um sicherzugehen, dass sie existieren
+    available_kaliber = sorted(df_main["Kaliber"].unique().tolist())
+    filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=available_kaliber)
     
-    # Daten filtern
     display_df = df_main.copy()
     if filter_kal:
         display_df = display_df[display_df["Kaliber"].isin(filter_kal)]
 
-    # Metriken berechnen (basierend auf gefilterten Daten!)
+    # Metriken
     m1, m2, m3 = st.columns(3)
-    
-    # Summe der Stück-Spalte berechnen
     if "Stück" in display_df.columns:
         total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').sum()
-        label = "Gesamt (gefiltert)" if filter_kal else "Gesamtproduktion"
-        m1.metric(label, f"{int(total_sum)} Schuss")
+        m1.metric("Gesamt (gefiltert)", f"{int(total_sum)} Schuss")
     
     m2.metric("Einträge", len(display_df))
     
-    if not display_df.empty and "Kaliber" in display_df.columns:
-        m3.metric("Letzter Eintrag", str(display_df["Kaliber"].iloc[-1]))
+    if not display_df.empty:
+        m3.metric("Letztes Kaliber", str(display_df["Kaliber"].iloc[-1]))
 
     st.divider()
-    
-    # Tabelle anzeigen (neueste oben)
     st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
+
+    # DIAGNOSE (Nur sichtbar wenn man aufklappt)
+    with st.expander("🐞 Diagnose: Gefundene Kaliber in der Tabelle"):
+        st.write("In der Tabelle stehen aktuell diese Werte in der Spalte Kaliber:")
+        st.write(available_kaliber)
 else:
-    st.info("Das Tabellenblatt 'Ladedaten' ist leer oder wurde nicht gefunden.")
+    st.info("Das Tabellenblatt 'Ladedaten' ist leer.")
 
 with st.expander("🛠️ Administration"):
     if st.button("🗑️ Letzten Eintrag löschen"):
