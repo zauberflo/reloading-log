@@ -15,7 +15,6 @@ def get_list(sheet_name):
     """Holt die Daten aus den Referenz-Tabellenblättern (Geschosse, Pulver, etc.)"""
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
-        # Wir nehmen die erste Spalte und entfernen leere Zellen
         return df.iloc[:, 0].dropna().unique().tolist()
     except:
         return []
@@ -30,7 +29,6 @@ def load_main_data():
         return pd.DataFrame()
 
 # --- DATEN INITIALISIEREN ---
-# Hier laden wir die Listen für die Dropdowns aus deinen anderen Tabellenblättern
 list_kaliber = get_list("Kaliber")
 list_geschosse = get_list("Geschosse")
 list_pulver = get_list("Pulver")
@@ -43,7 +41,6 @@ st.title("🎯 Wiederlade-Logbuch")
 
 # --- SIDEBAR ---
 with st.sidebar:
-    # --- TEIL 1: NEUE LADUNG ERFASSEN ---
     st.header("📝 Neue Ladung erfassen")
     with st.form("entry_form", clear_on_submit=True):
         f_date = st.date_input("Ladedatum", datetime.now())
@@ -59,13 +56,11 @@ with st.sidebar:
         f_anm = st.text_input("Anmerkung")
         
         if st.form_submit_button("💾 Ladung Speichern"):
-            # Gesamtzahl automatisch berechnen
+            # Gesamtzahl robust berechnen
             current_total = 0
             if not df_main.empty and "Gesamt" in df_main.columns:
-                try:
-                    current_total = pd.to_numeric(df_main["Gesamt"]).max()
-                except: 
-                    current_total = 0
+                num_total = pd.to_numeric(df_main["Gesamt"], errors='coerce').dropna()
+                current_total = num_total.max() if not num_total.empty else 0
             
             new_total = current_total + f_stueck
             
@@ -91,10 +86,7 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    
-    # --- TEIL 2: NEUE ARTEN HINZUFÜGEN ---
     st.header("🆕 Stammdaten ergänzen")
-    # Hier wählst du aus, in welches Tabellenblatt der neue Eintrag soll
     cat = st.selectbox("Kategorie", ["Kaliber", "Geschosse", "Pulver", "Zünder", "Hülsen"])
     new_val = st.text_input(f"Neuer Name für {cat}")
     
@@ -102,7 +94,6 @@ with st.sidebar:
         if new_val:
             current_items = get_list(cat)
             if new_val not in current_items:
-                # Erstellt ein DataFrame mit dem neuen Wert für das entsprechende Blatt
                 new_df = pd.DataFrame({cat: current_items + [new_val]})
                 conn.update(spreadsheet=SHEET_URL, worksheet=cat, data=new_df)
                 st.cache_data.clear()
@@ -113,28 +104,29 @@ with st.sidebar:
 
 # --- DASHBOARD ANZEIGE ---
 if not df_main.empty:
-    # Metriken (Gesamtzahlen)
     m1, m2, m3 = st.columns(3)
+    
+    # Sicherer Umgang mit der Spalte 'Gesamt'
     if "Gesamt" in df_main.columns:
-        total = pd.to_numeric(df_main["Gesamt"]).max()
-        m1.metric("Gesamtproduktion", f"{int(total)} Schuss")
+        num_total = pd.to_numeric(df_main["Gesamt"], errors='coerce').dropna()
+        total_val = int(num_total.max()) if not num_total.empty else 0
+        m1.metric("Gesamtproduktion", f"{total_val} Schuss")
+    
     m2.metric("Einträge", len(df_main))
-    m3.metric("Letztes Kaliber", df_main["Kaliber"].iloc[-1] if "Kaliber" in df_main.columns else "-")
+    
+    if "Kaliber" in df_main.columns:
+        m3.metric("Letztes Kaliber", str(df_main["Kaliber"].iloc[-1]))
 
     st.divider()
-    
-    # Filterfunktion
     filter_kal = st.multiselect("Kaliber filtern", options=list_kaliber)
     display_df = df_main
     if filter_kal:
         display_df = df_main[df_main["Kaliber"].isin(filter_kal)]
 
-    # Tabelle anzeigen (neueste Einträge oben)
     st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
 else:
     st.info("Das Tabellenblatt 'Ladedaten' ist leer oder wurde nicht gefunden.")
 
-# Admin Bereich zum Löschen
 with st.expander("🛠️ Administration"):
     if st.button("🗑️ Letzten Eintrag löschen"):
         if not df_main.empty:
