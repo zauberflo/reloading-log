@@ -10,25 +10,19 @@ st.set_page_config(page_title="Reloading Log Professional", page_icon="🎯", la
 conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxKSwe1jfOi7zqX8LHY/edit"
 
-# --- HELFER: DATEN AUS REATERN LADEN ---
+# --- HELFER: DATEN LADEN (MIT AUTHENTIFIZIERUNG) ---
 def get_list(sheet_name):
     try:
+        # WICHTIG: spreadsheet=SHEET_URL sorgt dafür, dass die Secrets genutzt werden!
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=3600)
-        return df.iloc[:, 0].dropna().tolist() # Nimmt die erste Spalte jedes Reiters
+        return df.iloc[:, 0].dropna().tolist()
     except:
         return []
 
-# Laden der Dropdown-Listen für die Eingabemaske
-list_kaliber = get_list("Kaliber")
-list_geschosse = get_list("Geschosse")
-list_pulver = get_list("Pulver")
-list_zuender = get_list("Zünder")
-list_huelsen = get_list("Hülsen")
-
 def load_main_data():
+    # Auch hier: spreadsheet=SHEET_URL verwenden
     df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedatum", ttl=0)
     return df.dropna(how="all")
-
 # --- HAUPTBEREICH ---
 st.title("🎯 Wiederlade-Logbuch")
 
