@@ -13,27 +13,39 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 # --- HELFER: DATEN LADEN ---
 def get_list(sheet_name):
     try:
-        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
+        # Hier nutzen wir einen kurzen Cache von 10 Min für die Stammdaten
+        df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=600)
         return [str(x).strip() for x in df.iloc[:, 0].dropna().unique().tolist()]
     except:
         return []
 
 def load_main_data():
     try:
+        # Ladedaten ohne Cache (ttl=0), damit neue Einträge sofort da sind
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=0)
-        if df is None or df.empty:
+        
+        if df is None:
             return pd.DataFrame()
         
+        # Entferne komplett leere Zeilen/Spalten
         df = df.dropna(how="all")
+        
+        if df.empty:
+            return df
+
         # Alle Textspalten bereinigen
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
         
+        # Spalte 'Gesamt' ignorieren, falls sie in Google Sheets noch existiert
         if "Gesamt" in df.columns:
             df = df.drop(columns=["Gesamt"])
+            
         return df
     except Exception as e:
-        return pd.DataFrame()
+        # Zeige den echten Fehler an, falls Google nicht antwortet
+        st.error(f"⚠️ Verbindung zu Google Sheets unterbrochen: {e}")
+        return None 
 
 # --- DATEN INITIALISIEREN ---
 list_kaliber = get_list("Kaliber")
@@ -69,7 +81,8 @@ with st.sidebar:
                 "Pulver": f_pul, "Grain": f_grain, "OAL": f_oal,
                 "Crimp": f_crimp, "Zünder": f_zuen, "Hülsen": f_huel, "Anmerkung": f_anm
             }])
-            updated = pd.concat([df_main, new_row], ignore_index=True)
+            # Wir hängen die neue Zeile an die bestehenden Daten an
+            updated = pd.concat([df_main, new_row], ignore_index=True) if df_main is not None else new_row
             conn.update(spreadsheet=SHEET_URL, worksheet="Ladedaten", data=updated)
             st.cache_data.clear()
             st.rerun()
@@ -89,8 +102,11 @@ with st.sidebar:
                 st.rerun()
 
 # --- HAUPTBEREICH ---
-if not df_main.empty:
-    # Filter-Logik
+# Wenn df_main None ist, gab es einen Verbindungsfehler
+if df_main is None:
+    st.warning("Verbindung wird neu aufgebaut... Bitte Seite aktualisieren.")
+elif not df_main.empty:
+    # Filter
     available_kaliber = sorted(df_main["Kaliber"].unique().tolist())
     filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=available_kaliber)
     
@@ -98,10 +114,9 @@ if not df_main.empty:
     if filter_kal:
         display_df = display_df[display_df["Kaliber"].isin(filter_kal)]
 
-    # Metriken mit Sicherheitsprüfung
+    # Metriken
     m1, m2, m3 = st.columns(3)
     
-    # 1. Summe berechnen
     total_sum = 0
     if "Stück" in display_df.columns:
         total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').fillna(0).sum()
@@ -109,7 +124,6 @@ if not df_main.empty:
     m1.metric("Schuss (gefiltert)", f"{int(total_sum)}")
     m2.metric("Einträge", len(display_df))
     
-    # 3. Letztes Kaliber (Nur wenn display_df nicht leer ist!)
     last_cal = "-"
     if not display_df.empty and "Kaliber" in display_df.columns:
         last_cal = str(display_df["Kaliber"].iloc[-1])
@@ -117,17 +131,16 @@ if not df_main.empty:
 
     st.divider()
     
-    # Tabelle anzeigen
     if not display_df.empty:
         st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
     else:
-        st.warning("Keine Daten für die gewählte Filterkombination vorhanden.")
+        st.info("Keine Daten für diesen Filter.")
 else:
-    st.info("Das Tabellenblatt 'Ladedaten' ist leer.")
+    st.info("Das Tabellenblatt 'Ladedaten' scheint leer zu sein oder wurde nicht geladen.")
 
 with st.expander("🛠️ Administration"):
     if st.button("🗑️ Letzten Eintrag löschen"):
-        if not df_main.empty:
+        if df_main is not None and not df_main.empty:
             conn.update(spreadsheet=SHEET_URL, worksheet="Ladedaten", data=df_main[:-1])
             st.cache_data.clear()
             st.rerun()
