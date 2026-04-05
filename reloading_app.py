@@ -14,7 +14,6 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1qEUbTNszbjXmFYi4V9LaXMt6mxK
 def get_list(sheet_name):
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet=sheet_name, ttl=0)
-        # .strip() entfernt unsichtbare Leerzeichen, die den Filter blockieren
         return [str(x).strip() for x in df.iloc[:, 0].dropna().unique().tolist()]
     except:
         return []
@@ -22,8 +21,11 @@ def get_list(sheet_name):
 def load_main_data():
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet="Ladedaten", ttl=0)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        
         df = df.dropna(how="all")
-        # WICHTIG: Alle Textspalten von Leerzeichen befreien
+        # Alle Textspalten bereinigen
         for col in df.select_dtypes(include=['object']).columns:
             df[col] = df[col].astype(str).str.strip()
         
@@ -31,7 +33,6 @@ def load_main_data():
             df = df.drop(columns=["Gesamt"])
         return df
     except Exception as e:
-        st.error(f"Fehler beim Laden: {e}")
         return pd.DataFrame()
 
 # --- DATEN INITIALISIEREN ---
@@ -89,8 +90,7 @@ with st.sidebar:
 
 # --- HAUPTBEREICH ---
 if not df_main.empty:
-    # Filter
-    # Wir nehmen die Kaliber direkt aus den Daten, um sicherzugehen, dass sie existieren
+    # Filter-Logik
     available_kaliber = sorted(df_main["Kaliber"].unique().tolist())
     filter_kal = st.multiselect("🔍 Nach Kaliber filtern", options=available_kaliber)
     
@@ -98,24 +98,30 @@ if not df_main.empty:
     if filter_kal:
         display_df = display_df[display_df["Kaliber"].isin(filter_kal)]
 
-    # Metriken
+    # Metriken mit Sicherheitsprüfung
     m1, m2, m3 = st.columns(3)
-    if "Stück" in display_df.columns:
-        total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').sum()
-        m1.metric("Gesamt (gefiltert)", f"{int(total_sum)} Schuss")
     
+    # 1. Summe berechnen
+    total_sum = 0
+    if "Stück" in display_df.columns:
+        total_sum = pd.to_numeric(display_df["Stück"], errors='coerce').fillna(0).sum()
+    
+    m1.metric("Schuss (gefiltert)", f"{int(total_sum)}")
     m2.metric("Einträge", len(display_df))
     
-    if not display_df.empty:
-        m3.metric("Letztes Kaliber", str(display_df["Kaliber"].iloc[-1]))
+    # 3. Letztes Kaliber (Nur wenn display_df nicht leer ist!)
+    last_cal = "-"
+    if not display_df.empty and "Kaliber" in display_df.columns:
+        last_cal = str(display_df["Kaliber"].iloc[-1])
+    m3.metric("Letztes Kaliber", last_cal)
 
     st.divider()
-    st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
-
-    # DIAGNOSE (Nur sichtbar wenn man aufklappt)
-    with st.expander("🐞 Diagnose: Gefundene Kaliber in der Tabelle"):
-        st.write("In der Tabelle stehen aktuell diese Werte in der Spalte Kaliber:")
-        st.write(available_kaliber)
+    
+    # Tabelle anzeigen
+    if not display_df.empty:
+        st.dataframe(display_df.iloc[::-1], use_container_width=True, hide_index=True)
+    else:
+        st.warning("Keine Daten für die gewählte Filterkombination vorhanden.")
 else:
     st.info("Das Tabellenblatt 'Ladedaten' ist leer.")
 
